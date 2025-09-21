@@ -1,10 +1,16 @@
 import asyncio
 import json
 
+# === CONFIGURATION ===
 POSEIDON_HOST = 'miraficus.cz'
 POSEIDON_PORT = 25575
 PROXY_PORT = 25585
 
+SPOOFED_VERSION_NAME = '1.7.3'
+SPOOFED_PROTOCOL = 47  # Minecraft 1.8.9 for compatibility
+DEFAULT_DESCRIPTION = 'Legacy Minecraft Server'
+
+# === VARINT UTILITIES ===
 def read_varint(data):
     num = 0
     for i in range(len(data)):
@@ -36,6 +42,7 @@ async def read_packet(reader):
     except Exception as e:
         raise Exception(f"Failed to read packet: {e}")
 
+# === MAIN HANDLER ===
 async def handle_client(reader, writer):
     peer = writer.get_extra_info('peername')
     print(f"[+] Connection from {peer}")
@@ -87,9 +94,9 @@ async def handle_client(reader, writer):
             motd = response.decode('utf-16be', errors='ignore').strip('\x00')
             parts = motd.split('\xa7')
             json_response = {
-                "version": {"name": "1.7.3", "protocol": 39},
+                "version": {"name": SPOOFED_VERSION_NAME, "protocol": SPOOFED_PROTOCOL},
                 "players": {"max": int(parts[1]) if len(parts) > 1 else 20, "online": 0},
-                "description": {"text": parts[0] if parts else "Back2Beta Server"}
+                "description": {"text": parts[0] if parts else DEFAULT_DESCRIPTION}
             }
 
             json_bytes = json.dumps(json_response).encode('utf-8')
@@ -140,6 +147,7 @@ async def handle_client(reader, writer):
         writer.close()
         await writer.wait_closed()
 
+# === SERVER LOOP ===
 async def main():
     server = await asyncio.start_server(handle_client, '0.0.0.0', PROXY_PORT)
     print(f"[✓] Proxy listening on port {PROXY_PORT}")
