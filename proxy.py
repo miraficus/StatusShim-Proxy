@@ -28,7 +28,7 @@ def write_varint(value):
 
 async def read_packet(reader):
     try:
-        prefix = await reader.readexactly(1)
+        prefix = await reader.read(1)
         buffer = prefix + await reader.read(4)
         length, len_len = read_varint(buffer)
         packet = await reader.readexactly(length)
@@ -87,7 +87,7 @@ async def handle_client(reader, writer):
             motd = response.decode('utf-16be', errors='ignore').strip('\x00')
             parts = motd.split('\xa7')
             json_response = {
-                "version": {"name": parts[-1] if len(parts) > 2 else "Beta 1.7.3", "protocol": 5},
+                "version": {"name": "1.7.3", "protocol": 39},
                 "players": {"max": int(parts[1]) if len(parts) > 1 else 20, "online": 0},
                 "description": {"text": parts[0] if parts else "Back2Beta Server"}
             }
