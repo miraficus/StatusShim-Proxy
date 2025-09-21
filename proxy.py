@@ -101,6 +101,13 @@ async def handle_client(reader, writer):
             packet_id, id_len = read_varint(handshake)
             payload = handshake[id_len:]
             client_protocol, proto_len = read_varint(payload)
+
+            # Log handshake details
+            print(f"[→] Handshake packet: {handshake.hex()}")
+            print(f"[→] Packet ID: {packet_id}")
+            print(f"[→] Client protocol: {client_protocol}")
+            print(f"[→] Payload after protocol: {payload[proto_len:].hex()}")
+
         except Exception as e:
             print(f"[x] Error parsing handshake packet: {e}")
             print(f"    → Handshake: {handshake.hex()}")
