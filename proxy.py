@@ -7,7 +7,6 @@ POSEIDON_PORT = 25575
 PROXY_PORT = 25585
 
 SPOOFED_VERSION_NAME = '1.7.3'
-SPOOFED_PROTOCOL = 47  # Minecraft 1.8.9 for compatibility
 DEFAULT_DESCRIPTION = 'Back2Beta Server'
 
 # === VARINT UTILITIES ===
@@ -45,6 +44,18 @@ async def read_packet(reader, context="unknown"):
         print(f"    → Buffer length: {len(buffer)}")
         return b''
 
+# === CONNECTION PIPE ===
+async def pipe(src, dst):
+    try:
+        while not src.at_eof():
+            data = await src.read(1024)
+            if not data:
+                break
+            dst.write(data)
+            await dst.drain()
+    except:
+        pass
+
 # === MAIN HANDLER ===
 async def handle_client(reader, writer):
     peer = writer.get_extra_info('peername')
@@ -70,27 +81,33 @@ async def handle_client(reader, writer):
             print("[✓] Responded to legacy ping")
             return
 
-        # Modern ping: read handshake
+        # Try to parse modern handshake
         buffer = peek + await reader.read(4)
         try:
             length, len_len = read_varint(buffer)
             handshake = await reader.readexactly(length)
         except Exception as e:
-            print(f"[x] Error reading handshake: {e}")
-            print(f"    → Raw buffer: {buffer.hex()}")
-            print(f"    → Buffer length: {len(buffer)}")
+            print(f"[!] Legacy login or malformed packet → forwarding")
+            reader_p, writer_p = await asyncio.open_connection(POSEIDON_HOST, POSEIDON_PORT)
+            writer_p.write(peek)
+            await writer_p.drain()
+            await asyncio.gather(
+                pipe(reader, writer_p),
+                pipe(reader_p, writer)
+            )
             return
 
         try:
             packet_id, id_len = read_varint(handshake)
             payload = handshake[id_len:]
+            client_protocol, proto_len = read_varint(payload)
         except Exception as e:
             print(f"[x] Error parsing handshake packet: {e}")
             print(f"    → Handshake: {handshake.hex()}")
             return
 
         if packet_id == 0x00 and payload[-1] == 1:  # Status intent
-            print("[!] Modern status ping detected")
+            print(f"[!] Modern status ping detected (client protocol: {client_protocol})")
 
             # Read status request
             status_packet = await read_packet(reader, context="status request")
@@ -116,7 +133,7 @@ async def handle_client(reader, writer):
             motd = response.decode('utf-16be', errors='ignore').strip('\x00')
             parts = motd.split('\xa7')
             json_response = {
-                "version": {"name": SPOOFED_VERSION_NAME, "protocol": SPOOFED_PROTOCOL},
+                "version": {"name": SPOOFED_VERSION_NAME, "protocol": client_protocol},
                 "players": {"max": int(parts[1]) if len(parts) > 1 else 20, "online": 0},
                 "description": {"text": parts[0] if parts else DEFAULT_DESCRIPTION}
             }
@@ -149,21 +166,10 @@ async def handle_client(reader, writer):
             return
 
         # Fallback: forward full connection to Poseidon
+        print("[!] Forwarding full connection to Poseidon")
         reader_p, writer_p = await asyncio.open_connection(POSEIDON_HOST, POSEIDON_PORT)
-        writer_p.write(write_varint(length) + handshake)
+        writer_p.write(buffer + handshake)
         await writer_p.drain()
-
-        async def pipe(src, dst):
-            try:
-                while not src.at_eof():
-                    data = await src.read(1024)
-                    if not data:
-                        break
-                    dst.write(data)
-                    await dst.drain()
-            except:
-                pass
-
         await asyncio.gather(
             pipe(reader, writer_p),
             pipe(reader_p, writer)
