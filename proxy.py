@@ -8,7 +8,7 @@ PROXY_PORT = 25585
 
 SPOOFED_VERSION_NAME = '1.7.3'
 SPOOFED_PROTOCOL = 47  # Minecraft 1.8.9 for compatibility
-DEFAULT_DESCRIPTION = 'Legacy Minecraft Server'
+DEFAULT_DESCRIPTION = 'Back2Beta Server'
 
 # === VARINT UTILITIES ===
 def read_varint(data):
@@ -18,7 +18,7 @@ def read_varint(data):
         num |= (byte & 0x7F) << (7 * i)
         if not byte & 0x80:
             return num, i + 1
-    raise ValueError("VarInt too long")
+    raise ValueError(f"VarInt too long → data: {data.hex()}")
 
 def write_varint(value):
     out = bytearray()
@@ -32,7 +32,7 @@ def write_varint(value):
             break
     return bytes(out)
 
-async def read_packet(reader):
+async def read_packet(reader, context="unknown"):
     try:
         prefix = await reader.read(1)
         buffer = prefix + await reader.read(4)
@@ -40,7 +40,10 @@ async def read_packet(reader):
         packet = await reader.readexactly(length)
         return packet
     except Exception as e:
-        raise Exception(f"Failed to read packet: {e}")
+        print(f"[x] Error during {context}: {e}")
+        print(f"    → Raw buffer: {buffer.hex()}")
+        print(f"    → Buffer length: {len(buffer)}")
+        return b''
 
 # === MAIN HANDLER ===
 async def handle_client(reader, writer):
@@ -69,19 +72,38 @@ async def handle_client(reader, writer):
 
         # Modern ping: read handshake
         buffer = peek + await reader.read(4)
-        length, len_len = read_varint(buffer)
-        handshake = await reader.readexactly(length)
-        packet_id, id_len = read_varint(handshake)
-        payload = handshake[id_len:]
+        try:
+            length, len_len = read_varint(buffer)
+            handshake = await reader.readexactly(length)
+        except Exception as e:
+            print(f"[x] Error reading handshake: {e}")
+            print(f"    → Raw buffer: {buffer.hex()}")
+            print(f"    → Buffer length: {len(buffer)}")
+            return
+
+        try:
+            packet_id, id_len = read_varint(handshake)
+            payload = handshake[id_len:]
+        except Exception as e:
+            print(f"[x] Error parsing handshake packet: {e}")
+            print(f"    → Handshake: {handshake.hex()}")
+            return
 
         if packet_id == 0x00 and payload[-1] == 1:  # Status intent
             print("[!] Modern status ping detected")
 
             # Read status request
-            status_packet = await read_packet(reader)
-            status_id, _ = read_varint(status_packet)
-            if status_id != 0x01:
-                raise Exception("Unexpected packet after handshake")
+            status_packet = await read_packet(reader, context="status request")
+            if not status_packet:
+                return
+            try:
+                status_id, _ = read_varint(status_packet)
+                if status_id != 0x01:
+                    raise Exception("Unexpected packet after handshake")
+            except Exception as e:
+                print(f"[x] Error parsing status request: {e}")
+                print(f"    → Status packet: {status_packet.hex()}")
+                return
 
             # Send legacy ping to Poseidon
             reader_p, writer_p = await asyncio.open_connection(POSEIDON_HOST, POSEIDON_PORT)
@@ -107,14 +129,20 @@ async def handle_client(reader, writer):
             print("[✓] Sent JSON MOTD")
 
             # Read ping packet and echo it
-            ping_packet = await read_packet(reader)
-            ping_id, ping_id_len = read_varint(ping_packet)
-            if ping_id == 0x02:
-                echo = write_varint(0x01) + ping_packet[ping_id_len:]
-                full_echo = write_varint(len(echo)) + echo
-                writer.write(full_echo)
-                await writer.drain()
-                print("[✓] Echoed ping packet")
+            ping_packet = await read_packet(reader, context="ping packet")
+            if not ping_packet:
+                return
+            try:
+                ping_id, ping_id_len = read_varint(ping_packet)
+                if ping_id == 0x02:
+                    echo = write_varint(0x01) + ping_packet[ping_id_len:]
+                    full_echo = write_varint(len(echo)) + echo
+                    writer.write(full_echo)
+                    await writer.drain()
+                    print("[✓] Echoed ping packet")
+            except Exception as e:
+                print(f"[x] Error parsing ping packet: {e}")
+                print(f"    → Ping packet: {ping_packet.hex()}")
 
             writer.close()
             await writer.wait_closed()
